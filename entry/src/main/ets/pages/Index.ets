@@ -1,4 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
 
 const SHUFFLE_MOVES = 200;
 
@@ -37,13 +38,25 @@ struct HuarongGame {
   @State clickedCol: number = -1;
   @State refreshKey: number = 0;
   @State gameStarted: boolean = false;
+  @State containerWidth: number = 0;          // 棋盘容器实际宽度
+  private boardPadding: number = 20;           // 内边距
+  private cellMargin: number = 4;              // 格子外边距
+  private maxBoardWidth: number = 600;         // 棋盘最大宽度限制（vp）
 
   aboutToAppear(): void {
     this.startNewGame();
+    // 监听窗口大小变化，实现横竖屏自适应
+    window.getLastWindow(getContext(this)).then((win) => {
+      win.on('windowSizeChange', () => {
+        // 窗口大小改变时，强制刷新 containerWidth（将在下一次 layout 中通过 onAreaChange 更新）
+        this.containerWidth = 0;
+      });
+    });
   }
 
   aboutToDisappear(): void {
     if (this.timerId !== -1) clearInterval(this.timerId);
+    // 移除窗口监听（可选，但组件销毁时自动清理）
   }
 
   setBoardSize(size: number): void {
@@ -128,10 +141,7 @@ struct HuarongGame {
         title: '胜利',
         message: `步数:${this.moveCount} 用时:${this.timer}秒`,
         buttons: [{ text: '再玩一局', color: '#007DFF' }]
-      }).then(() => this.startNewGame()).catch((err: Error) => {
-        console.error(`Dialog error: ${err.message}`);
-        this.startNewGame();
-      });
+      }).then(() => this.startNewGame()).catch(() => this.startNewGame());
     }
   }
 
@@ -152,162 +162,128 @@ struct HuarongGame {
     this.tryMove(row, col);
   }
 
-  // 辅助方法：获取格子文本
+  // 计算每个格子的宽度（限制最大棋盘宽度）
+  getCellWidth(): number {
+    if (this.containerWidth === 0) return 80;
+    // 棋盘实际使用的宽度 = min(容器宽度, 最大宽度)
+    const boardWidth = Math.min(this.containerWidth, this.maxBoardWidth);
+    const available = boardWidth - this.boardPadding * 2;
+    let cellW = available / this.boardSize - 2 * this.cellMargin;
+    if (cellW < 50) cellW = 50;
+    return cellW;
+  }
+
+  getFontSize(): number {
+    return Math.max(16, this.getCellWidth() * 0.35);
+  }
+
+  // 辅助方法（供 @Builder 内部调用）
   getCellText(row: number, col: number): string {
     const v = this.board[row][col];
     return v === 0 ? '' : v.toString();
   }
-
-  // 辅助方法：获取背景色
   getCellBg(row: number, col: number): string {
     return this.board[row][col] === 0 ? '#F0F0F0' : '#007DFF';
   }
-
-  // 辅助方法：获取文字颜色
   getCellColor(row: number, col: number): string {
     return this.board[row][col] === 0 ? '#FF9800' : '#FFFFFF';
   }
-
-  // 辅助方法：获取缩放比例
   getCellScale(row: number, col: number): number {
     return (this.clickedRow === row && this.clickedCol === col) ? 0.9 : 1;
   }
 
-  // 辅助方法：获取格子大小
-  getCellSize(): number {
-    if (this.boardSize === 3) return 90;
-    if (this.boardSize === 4) return 80;
-    return 65;
-  }
-
-  // 辅助方法：获取字体大小
-  getFontSize(): number {
-    if (this.boardSize === 3) return 32;
-    if (this.boardSize === 4) return 28;
-    return 20;
+  // 单个格子 @Builder
+  @Builder
+  Cell(row: number, col: number) {
+    Text(this.getCellText(row, col))
+      .width(this.getCellWidth())
+      .height(this.getCellWidth())
+      .backgroundColor(this.getCellBg(row, col))
+      .fontColor(this.getCellColor(row, col))
+      .fontSize(this.getFontSize())
+      .fontWeight(FontWeight.Bold)
+      .textAlign(TextAlign.Center)
+      .borderRadius(12)
+      .margin(this.cellMargin)
+      .scale({
+        x: this.getCellScale(row, col),
+        y: this.getCellScale(row, col)
+      })
+      .animation({ duration: 100, curve: Curve.EaseInOut })
+      .onClick(() => {
+        if (!this.gameWon && this.board[row][col] !== 0) this.onGridClick(row, col);
+      })
   }
 
   build() {
-    Column() {
-      Row() {
-        Text(`步数: ${this.moveCount}`).fontSize(24).layoutWeight(1).textAlign(TextAlign.Center)
-        Text(`用时: ${this.timer} s`).fontSize(24).layoutWeight(1).textAlign(TextAlign.Center)
-        Button('重置').fontSize(20).layoutWeight(1).height(40).backgroundColor('#FF9800')
-          .onClick(() => this.startNewGame())
-      }
-      .width('100%').padding(12).justifyContent(FlexAlign.SpaceEvenly)
-
-      Row() {
-        Text('难度：').fontSize(18).margin({ right: 10 })
-        Radio({ value: '3', group: 'sizeGroup' }).checked(this.boardSize===3)
-          .onChange((c: boolean) => { if(c) this.setBoardSize(3); })
-        Text('3x3').fontSize(16).margin({ right: 20 })
-        Radio({ value: '4', group: 'sizeGroup' }).checked(this.boardSize===4)
-          .onChange((c: boolean) => { if(c) this.setBoardSize(4); })
-        Text('4x4').fontSize(16).margin({ right: 20 })
-        Radio({ value: '5', group: 'sizeGroup' }).checked(this.boardSize===5)
-          .onChange((c: boolean) => { if(c) this.setBoardSize(5); })
-        Text('5x5').fontSize(16)
-      }
-      .width('100%').padding(8).justifyContent(FlexAlign.Center)
-
-      // 棋盘容器
+    Scroll() {
       Column() {
-        if (this.boardSize === 3) {
-          Column() {
-            Row() {
-              Text(this.getCellText(0,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,0)).fontColor(this.getCellColor(0,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,0), y: this.getCellScale(0,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][0] !== 0) this.onGridClick(0,0); })
-              Text(this.getCellText(0,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,1)).fontColor(this.getCellColor(0,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,1), y: this.getCellScale(0,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][1] !== 0) this.onGridClick(0,1); })
-              Text(this.getCellText(0,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,2)).fontColor(this.getCellColor(0,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,2), y: this.getCellScale(0,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][2] !== 0) this.onGridClick(0,2); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(1,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,0)).fontColor(this.getCellColor(1,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,0), y: this.getCellScale(1,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][0] !== 0) this.onGridClick(1,0); })
-              Text(this.getCellText(1,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,1)).fontColor(this.getCellColor(1,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,1), y: this.getCellScale(1,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][1] !== 0) this.onGridClick(1,1); })
-              Text(this.getCellText(1,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,2)).fontColor(this.getCellColor(1,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,2), y: this.getCellScale(1,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][2] !== 0) this.onGridClick(1,2); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(2,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,0)).fontColor(this.getCellColor(2,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,0), y: this.getCellScale(2,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][0] !== 0) this.onGridClick(2,0); })
-              Text(this.getCellText(2,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,1)).fontColor(this.getCellColor(2,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,1), y: this.getCellScale(2,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][1] !== 0) this.onGridClick(2,1); })
-              Text(this.getCellText(2,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,2)).fontColor(this.getCellColor(2,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,2), y: this.getCellScale(2,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][2] !== 0) this.onGridClick(2,2); })
-            }.justifyContent(FlexAlign.Center)
-          }
-        } else if (this.boardSize === 4) {
-          Column() {
-            Row() {
-              Text(this.getCellText(0,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,0)).fontColor(this.getCellColor(0,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,0), y: this.getCellScale(0,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][0] !== 0) this.onGridClick(0,0); })
-              Text(this.getCellText(0,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,1)).fontColor(this.getCellColor(0,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,1), y: this.getCellScale(0,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][1] !== 0) this.onGridClick(0,1); })
-              Text(this.getCellText(0,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,2)).fontColor(this.getCellColor(0,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,2), y: this.getCellScale(0,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][2] !== 0) this.onGridClick(0,2); })
-              Text(this.getCellText(0,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,3)).fontColor(this.getCellColor(0,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,3), y: this.getCellScale(0,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][3] !== 0) this.onGridClick(0,3); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(1,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,0)).fontColor(this.getCellColor(1,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,0), y: this.getCellScale(1,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][0] !== 0) this.onGridClick(1,0); })
-              Text(this.getCellText(1,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,1)).fontColor(this.getCellColor(1,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,1), y: this.getCellScale(1,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][1] !== 0) this.onGridClick(1,1); })
-              Text(this.getCellText(1,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,2)).fontColor(this.getCellColor(1,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,2), y: this.getCellScale(1,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][2] !== 0) this.onGridClick(1,2); })
-              Text(this.getCellText(1,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,3)).fontColor(this.getCellColor(1,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,3), y: this.getCellScale(1,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][3] !== 0) this.onGridClick(1,3); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(2,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,0)).fontColor(this.getCellColor(2,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,0), y: this.getCellScale(2,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][0] !== 0) this.onGridClick(2,0); })
-              Text(this.getCellText(2,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,1)).fontColor(this.getCellColor(2,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,1), y: this.getCellScale(2,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][1] !== 0) this.onGridClick(2,1); })
-              Text(this.getCellText(2,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,2)).fontColor(this.getCellColor(2,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,2), y: this.getCellScale(2,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][2] !== 0) this.onGridClick(2,2); })
-              Text(this.getCellText(2,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,3)).fontColor(this.getCellColor(2,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,3), y: this.getCellScale(2,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][3] !== 0) this.onGridClick(2,3); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(3,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,0)).fontColor(this.getCellColor(3,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,0), y: this.getCellScale(3,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][0] !== 0) this.onGridClick(3,0); })
-              Text(this.getCellText(3,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,1)).fontColor(this.getCellColor(3,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,1), y: this.getCellScale(3,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][1] !== 0) this.onGridClick(3,1); })
-              Text(this.getCellText(3,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,2)).fontColor(this.getCellColor(3,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,2), y: this.getCellScale(3,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][2] !== 0) this.onGridClick(3,2); })
-              Text(this.getCellText(3,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,3)).fontColor(this.getCellColor(3,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,3), y: this.getCellScale(3,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][3] !== 0) this.onGridClick(3,3); })
-            }.justifyContent(FlexAlign.Center)
-          }
-        } else {
-          Column() {
-            Row() {
-              Text(this.getCellText(0,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,0)).fontColor(this.getCellColor(0,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,0), y: this.getCellScale(0,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][0] !== 0) this.onGridClick(0,0); })
-              Text(this.getCellText(0,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,1)).fontColor(this.getCellColor(0,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,1), y: this.getCellScale(0,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][1] !== 0) this.onGridClick(0,1); })
-              Text(this.getCellText(0,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,2)).fontColor(this.getCellColor(0,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,2), y: this.getCellScale(0,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][2] !== 0) this.onGridClick(0,2); })
-              Text(this.getCellText(0,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,3)).fontColor(this.getCellColor(0,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,3), y: this.getCellScale(0,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][3] !== 0) this.onGridClick(0,3); })
-              Text(this.getCellText(0,4)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(0,4)).fontColor(this.getCellColor(0,4)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(0,4), y: this.getCellScale(0,4) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[0][4] !== 0) this.onGridClick(0,4); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(1,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,0)).fontColor(this.getCellColor(1,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,0), y: this.getCellScale(1,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][0] !== 0) this.onGridClick(1,0); })
-              Text(this.getCellText(1,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,1)).fontColor(this.getCellColor(1,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,1), y: this.getCellScale(1,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][1] !== 0) this.onGridClick(1,1); })
-              Text(this.getCellText(1,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,2)).fontColor(this.getCellColor(1,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,2), y: this.getCellScale(1,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][2] !== 0) this.onGridClick(1,2); })
-              Text(this.getCellText(1,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,3)).fontColor(this.getCellColor(1,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,3), y: this.getCellScale(1,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][3] !== 0) this.onGridClick(1,3); })
-              Text(this.getCellText(1,4)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(1,4)).fontColor(this.getCellColor(1,4)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(1,4), y: this.getCellScale(1,4) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[1][4] !== 0) this.onGridClick(1,4); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(2,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,0)).fontColor(this.getCellColor(2,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,0), y: this.getCellScale(2,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][0] !== 0) this.onGridClick(2,0); })
-              Text(this.getCellText(2,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,1)).fontColor(this.getCellColor(2,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,1), y: this.getCellScale(2,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][1] !== 0) this.onGridClick(2,1); })
-              Text(this.getCellText(2,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,2)).fontColor(this.getCellColor(2,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,2), y: this.getCellScale(2,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][2] !== 0) this.onGridClick(2,2); })
-              Text(this.getCellText(2,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,3)).fontColor(this.getCellColor(2,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,3), y: this.getCellScale(2,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][3] !== 0) this.onGridClick(2,3); })
-              Text(this.getCellText(2,4)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(2,4)).fontColor(this.getCellColor(2,4)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(2,4), y: this.getCellScale(2,4) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[2][4] !== 0) this.onGridClick(2,4); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(3,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,0)).fontColor(this.getCellColor(3,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,0), y: this.getCellScale(3,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][0] !== 0) this.onGridClick(3,0); })
-              Text(this.getCellText(3,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,1)).fontColor(this.getCellColor(3,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,1), y: this.getCellScale(3,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][1] !== 0) this.onGridClick(3,1); })
-              Text(this.getCellText(3,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,2)).fontColor(this.getCellColor(3,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,2), y: this.getCellScale(3,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][2] !== 0) this.onGridClick(3,2); })
-              Text(this.getCellText(3,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,3)).fontColor(this.getCellColor(3,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,3), y: this.getCellScale(3,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][3] !== 0) this.onGridClick(3,3); })
-              Text(this.getCellText(3,4)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(3,4)).fontColor(this.getCellColor(3,4)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(3,4), y: this.getCellScale(3,4) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[3][4] !== 0) this.onGridClick(3,4); })
-            }.justifyContent(FlexAlign.Center)
-            Row() {
-              Text(this.getCellText(4,0)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(4,0)).fontColor(this.getCellColor(4,0)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(4,0), y: this.getCellScale(4,0) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[4][0] !== 0) this.onGridClick(4,0); })
-              Text(this.getCellText(4,1)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(4,1)).fontColor(this.getCellColor(4,1)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(4,1), y: this.getCellScale(4,1) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[4][1] !== 0) this.onGridClick(4,1); })
-              Text(this.getCellText(4,2)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(4,2)).fontColor(this.getCellColor(4,2)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(4,2), y: this.getCellScale(4,2) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[4][2] !== 0) this.onGridClick(4,2); })
-              Text(this.getCellText(4,3)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(4,3)).fontColor(this.getCellColor(4,3)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(4,3), y: this.getCellScale(4,3) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[4][3] !== 0) this.onGridClick(4,3); })
-              Text(this.getCellText(4,4)).width(this.getCellSize()).height(this.getCellSize()).backgroundColor(this.getCellBg(4,4)).fontColor(this.getCellColor(4,4)).fontSize(this.getFontSize()).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center).borderRadius(12).margin(2).scale({ x: this.getCellScale(4,4), y: this.getCellScale(4,4) }).animation({ duration: 100, curve: Curve.EaseInOut }).onClick(() => { if (!this.gameWon && this.board[4][4] !== 0) this.onGridClick(4,4); })
-            }.justifyContent(FlexAlign.Center)
+        // 顶部信息栏
+        Row() {
+          Text(`步数: ${this.moveCount}`).fontSize(24).layoutWeight(1).textAlign(TextAlign.Center)
+          Text(`用时: ${this.timer} s`).fontSize(24).layoutWeight(1).textAlign(TextAlign.Center)
+          Button('重置').fontSize(20).layoutWeight(1).height(40).backgroundColor('#FF9800')
+            .onClick(() => this.startNewGame())
+        }
+        .width('100%').padding(12).justifyContent(FlexAlign.SpaceEvenly)
+
+        // 难度选择
+        Row() {
+          Text('难度：').fontSize(18).margin({ right: 10 })
+          Radio({ value: '3', group: 'sizeGroup' }).checked(this.boardSize===3)
+            .onChange((c: boolean) => { if(c) this.setBoardSize(3); })
+          Text('3x3').fontSize(16).margin({ right: 20 })
+          Radio({ value: '4', group: 'sizeGroup' }).checked(this.boardSize===4)
+            .onChange((c: boolean) => { if(c) this.setBoardSize(4); })
+          Text('4x4').fontSize(16).margin({ right: 20 })
+          Radio({ value: '5', group: 'sizeGroup' }).checked(this.boardSize===5)
+            .onChange((c: boolean) => { if(c) this.setBoardSize(5); })
+          Text('5x5').fontSize(16)
+        }
+        .width('100%').padding(8).justifyContent(FlexAlign.Center)
+
+        // 棋盘容器（居中，限制最大宽度）
+        Column() {
+          if (this.boardSize === 3) {
+            Column() {
+              Row() { this.Cell(0,0); this.Cell(0,1); this.Cell(0,2); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(1,0); this.Cell(1,1); this.Cell(1,2); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(2,0); this.Cell(2,1); this.Cell(2,2); }.justifyContent(FlexAlign.Center)
+            }
+          } else if (this.boardSize === 4) {
+            Column() {
+              Row() { this.Cell(0,0); this.Cell(0,1); this.Cell(0,2); this.Cell(0,3); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(1,0); this.Cell(1,1); this.Cell(1,2); this.Cell(1,3); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(2,0); this.Cell(2,1); this.Cell(2,2); this.Cell(2,3); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(3,0); this.Cell(3,1); this.Cell(3,2); this.Cell(3,3); }.justifyContent(FlexAlign.Center)
+            }
+          } else {
+            Column() {
+              Row() { this.Cell(0,0); this.Cell(0,1); this.Cell(0,2); this.Cell(0,3); this.Cell(0,4); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(1,0); this.Cell(1,1); this.Cell(1,2); this.Cell(1,3); this.Cell(1,4); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(2,0); this.Cell(2,1); this.Cell(2,2); this.Cell(2,3); this.Cell(2,4); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(3,0); this.Cell(3,1); this.Cell(3,2); this.Cell(3,3); this.Cell(3,4); }.justifyContent(FlexAlign.Center)
+              Row() { this.Cell(4,0); this.Cell(4,1); this.Cell(4,2); this.Cell(4,3); this.Cell(4,4); }.justifyContent(FlexAlign.Center)
+            }
           }
         }
+        .width('100%')
+        .backgroundColor('#FAFAFA')
+        .borderRadius(20)
+        .padding(this.boardPadding)
+        .key(this.refreshKey.toString())
+        .margin({ top: 10, bottom: 20 })
+        .alignItems(HorizontalAlign.Center)
+        .onAreaChange((_: Area, newArea: Area) => {
+          if (newArea.width && Math.abs(this.containerWidth - (newArea.width as number)) > 1) {
+            this.containerWidth = newArea.width as number;
+          }
+        })
       }
       .width('100%')
-      .backgroundColor('#FAFAFA')
-      .borderRadius(20)
-      .padding(10)
-      .key(this.refreshKey.toString())
-      .margin({ top: 10 })
-      .alignItems(HorizontalAlign.Center)
     }
-    .height('100%')
-    .width('100%')
     .backgroundColor('#F5F5F5')
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
   }
 }
